@@ -1,0 +1,80 @@
+# YMB: MongoDB persists account data in a named volume on the private data network.
+# YMB: the backend waits for database health, not merely container startup.
+# YMB: studentportfolio serves the static UI; its banking link uses the browser's reachable URL.
+# YMB: in Parts 2 and 3 only the gateway publishes a host port, limited to this laptop.
+# YMB: service order is readable documentation; depends_on and health checks enforce readiness.
+name: module5-part3
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes: [mongo_data:/data/db]
+    networks: [data]
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      MONGO_URI: mongodb://mongo:27017/bank_app
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+    depends_on:
+      mongo: {condition: service_healthy}
+    networks: [app, data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/login')"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+  transactions:
+    build:
+      context: ./transactions
+      dockerfile: Dockerfile
+    environment:
+      MONGO_URI: mongodb://mongo:27017/bank_app
+      PORT: "3000"
+    depends_on:
+      mongo: {condition: service_healthy}
+    networks: [app, data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 24
+  studentportfolio:
+    build:
+      context: ./studentportfolio
+      dockerfile: Dockerfile
+    depends_on:
+      backend: {condition: service_healthy}
+    networks: [app]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 5s
+      retries: 24
+  nginx:
+    image: nginx:1.28-alpine
+    ports: ["127.0.0.1:80:80"]
+    volumes: [./nginx.conf:/etc/nginx/nginx.conf:ro]
+    depends_on:
+      backend: {condition: service_healthy}
+      studentportfolio: {condition: service_healthy}
+      transactions: {condition: service_healthy}
+    networks: [app]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 5s
+      retries: 24
+volumes:
+  mongo_data:
+networks:
+  app:
+  data:
+    internal: true

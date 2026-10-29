@@ -1,0 +1,60 @@
+# This workflow checks YMB changes on main and in pull requests. It runs the
+# supplied backend tests plus balance/session tests, tests the JavaScript
+# service, builds containers and smoke-tests the real NGINX/MongoDB stack.
+# A failing step fails build-and-test. GitHub records the actor, commit,
+# timestamp and logs for Ben Secure's audit trail. This workflow does not
+# deploy to production or guarantee security. Required checks need branch rules.
+name: YMB Banking CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Test backend authentication and balances
+        working-directory: backend
+        run: python -m pytest tests/ -q
+      - name: Install JavaScript dependencies
+        working-directory: transactions/src
+        run: npm ci
+      - name: Test JavaScript transaction reports
+        working-directory: transactions/src
+        run: npm test
+      - name: Configure CI session key
+        run: echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
+      - name: Validate Compose and build containers
+        run: |
+          docker compose config --quiet
+          docker compose build
+      - name: Start and check real services
+        run: |
+          docker compose up -d --wait --wait-timeout 180
+          docker compose exec -T nginx nginx -t
+          python scripts/smoke_test.py
+      - name: Show status and logs
+        if: always()
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail 100
+      - name: Clean up CI environment
+        if: always()
+        run: docker compose down -v

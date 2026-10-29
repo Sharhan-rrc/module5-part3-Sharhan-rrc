@@ -1,0 +1,39 @@
+worker_processes 1;
+events { worker_connections 1024; }
+http {
+    include /etc/nginx/mime.types;
+    log_format ymb '$time_iso8601 $request_method $uri status=$status upstream=$upstream_addr';
+    access_log /dev/stdout ymb;
+    server {
+        listen 80;
+        server_name localhost;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        location = /_session_identity {
+            internal;
+            proxy_pass http://backend:5000/api/session-user;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header Cookie $http_cookie;
+        }
+        location = /api/session-user { return 404; }
+        location ~ ^/api/transactions/?$ {
+            auth_request /_session_identity;
+            auth_request_set $verified_user $upstream_http_x_user_id;
+            proxy_set_header X-User-ID $verified_user;
+            proxy_pass http://transactions:3000;
+            add_header X-YMB-Service transactions always;
+        }
+        location /api/ {
+            # Preserve /api/: the supplied Flask routes already include that prefix.
+            proxy_pass http://backend:5000;
+            add_header X-YMB-Service backend always;
+        }
+        location / {
+            proxy_pass http://studentportfolio:80;
+            add_header X-YMB-Service studentportfolio always;
+        }
+    }
+}
